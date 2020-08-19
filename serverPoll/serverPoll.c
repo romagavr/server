@@ -88,7 +88,7 @@ int main(void) {
 	struct pollfd *pfds = 0, *p = 0, *s = 0;
 	socklen_t addrlen;
 	char buffer[CDATA_LEN];
-	char remoteIP[INET6_ADDRSTRLEN];
+        char remoteIP[INET6_ADDRSTRLEN];  
 
 	int fd_count = 0;
 	int fd_size = 5;
@@ -132,7 +132,8 @@ int main(void) {
 						       remoteIP, INET6_ADDRSTRLEN), newfd);
 					}
 				} else {
-					int nbytes = recv((*p).fd, buffer, sizeof buffer, 0);
+					memset(&buffer, '\0', CDATA_LEN);
+					ssize_t nbytes = recv((*p).fd, buffer, sizeof buffer, 0);
 					if (nbytes <=0) {
 						if (nbytes == 0) {
 							fprintf(stdout, "Message: socket %d hung up\n", (*p).fd);
@@ -143,6 +144,7 @@ int main(void) {
 						close((*p).fd);
 						del_from_pfds(&pfds, p, &fd_count);
 					} else {
+						fprintf(stdout, "Message: recived %zu bytes from socket %d.\n", nbytes, (*p).fd);
 						for (s = pfds; s < pfds + fd_count; ++s) {
 							if ((*s).fd != listener && (*s).fd != (*p).fd 
 								&& send((*s).fd, buffer, nbytes, 0) == -1) 
