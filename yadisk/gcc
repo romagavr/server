@@ -1,0 +1,1 @@
+-Wall ../client.c -o client -I/usr/include/openssl -lssl -lcrypto
