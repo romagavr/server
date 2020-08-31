@@ -17,6 +17,10 @@
 #define CLIENT_ID "9d2223ab8e334c92bf2584a1e9a9516b"
 #define CLIENT_SECRET "ad81374363cf4a6ebd9aad69027615d5"
 #define HOST "oauth.yandex.ru"
+#define MAXLINE 4096
+#define CODE "2411377"
+
+//{"access_token": "AgAAAAAJfAwtAAaSXZEN657D4ETDiWSPzkL4oDE", "expires_in": 31536000, "refresh_token": "1:c0790JFluYo6AsrR:ZLZuX_KaVR_2EDeWof3G1zKDMne3DGeO-u8ywEe8VVwgd0JJEpr1:nOUDZvjgDg-U6hv3WgnUYQ", "token_type": "bearer"}
 
 int main(int argc, char *argv[]){
 
@@ -69,8 +73,41 @@ int main(int argc, char *argv[]){
     }
 
     printf("Sending request...\n");
-    const char *request = "GET /authorize?response_type=code&client_id="CLIENT_ID" HTTP/1.1\r\n"
-		                  "Host: "HOST"\r\n\r\n";
+    char sendline[MAXLINE+1];
+    snprintf(sendline, MAXLINE,
+		"GET /authorize?response_type=code&client_id=%s HTTP/1.1\r\n"
+		"Host: %s\r\n\r\n", CLIENT_ID, HOST);
+    int bytes_sent = SSL_write(ssl, sendline, strlen(sendline));
+    printf("Sent %d of %d bytes.\n", bytes_sent, (int)strlen(sendline));
+
+    char read[MAXLINE+1];
+    int bytes_received = SSL_read(ssl, read, 10000);
+    if (bytes_received < 1) 
+	    printf("Connection closed by peer.\n");
+    printf("Received (%d bytes): %.*s", bytes_received, bytes_received, read);
+
+    // 
+    const char *body = "grant_type=authorization_code&code="CODE"&client_id="CLIENT_ID"&client_secret="CLIENT_SECRET;
+    snprintf(sendline, MAXLINE,
+		"POST /token HTTP/1.1\r\n"
+		"Host: %s\r\n"
+                "Content-type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: %d\r\n\r\n%s", HOST, (int)strlen(body), body);
+    printf("\n%s\n", sendline);
+    bytes_sent = SSL_write(ssl, sendline, strlen(sendline));
+    printf("Sent %d of %d bytes.\n", bytes_sent, (int)strlen(sendline));
+
+    bytes_received = SSL_read(ssl, read, 10000);
+    if (bytes_received < 1) 
+	    printf("Connection closed by peer.\n");
+    printf("Received (%d bytes): %.*s", bytes_received, bytes_received, read);
+
+    printf("Closing socket...\n");
+    SSL_free(ssl);
+    close(socket_peer);
+    SSL_CTX_free(ctx);
+    printf("Finished.\n");
+
     const char *response = 
 		"GET / HTTP/1.1\r\n"
 		"Host: webdav.yandex.ru\r\n"
@@ -80,29 +117,6 @@ int main(int argc, char *argv[]){
         "Authorization: Basic Z2F2cmlsYW5kaWE6NzVyb21hNTVwb21h\r\n"
         "Accept: */*\r\n\r\n";
         //"<D:propfind xmlns:D=\"DAV:\"><D:prop><D:quota-available-bytes/><D:quota-used-bytes/></D:prop></D:propfind>";
-    int bytes_sent = SSL_write(ssl, request, strlen(request));
-    //int bytes_sent = send(socket_peer, response, strlen(response), 0);
-    printf("Sent %d of %d bytes.\n", bytes_sent, (int)strlen(request));
 
-	char *read = malloc(10000);
-	int bytes_received = SSL_read(ssl, read, 10000);
-	//int bytes_received = recv(socket_peer, read, 4096, 0);
-	if (bytes_received < 1) {
-		printf("Connection closed by peer.\n");
-	}
-	printf("Received (%d bytes): %.*s", bytes_received, bytes_received, read);
-
-    // 3909894
-    const char *body = "grant_type=authorization_code&code="CODE"&client_id="CLIENT_ID"&client_secret="CLIENT_SECRET;
-    const char *request2 = "POST /token HTTP/1.1\r\n"
-		                  "Host: "HOST"\r\n"
-                          "Content-type: application/x-www-form-urlencoded\r\n"
-                          "Content-Length:" + strlen(body) + "\r\n\r\n" + body;
-
-    printf("Closing socket...\n");
-    SSL_free(ssl);
-    close(socket_peer);
-    SSL_CTX_free(ctx);
-    printf("Finished.\n");
     return 0;
 }
