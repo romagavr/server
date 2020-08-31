@@ -14,6 +14,10 @@
 #include<openssl/ssl.h>
 #include<openssl/err.h>
 
+#define CLIENT_ID "9d2223ab8e334c92bf2584a1e9a9516b"
+#define CLIENT_SECRET "ad81374363cf4a6ebd9aad69027615d5"
+#define HOST "oauth.yandex.ru"
+
 int main(int argc, char *argv[]){
 
     printf("Configuring remote address...\n");
@@ -23,7 +27,7 @@ int main(int argc, char *argv[]){
     memset(&hints, 0, sizeof(struct addrinfo));
     hints.ai_socktype = SOCK_STREAM;
     struct addrinfo *peer_address;
-    if (getaddrinfo("oauth.yandex.ru", "https", &hints, &peer_address)) {
+    if (getaddrinfo(HOST, "https", &hints, &peer_address)) {
         fprintf(stderr, "geraddrinfo() failed. (%d)\n", errno);
         exit(EXIT_FAILURE);
     }
@@ -65,15 +69,20 @@ int main(int argc, char *argv[]){
     }
 
     printf("Sending request...\n");
+    const char *request = "GET /authorize?response_type=code&client_id="CLIENT_ID" HTTP/1.1\r\n"
+		                  "Host: "HOST"\r\n\r\n";
     const char *response = 
-		"POST /authorize HTTP/1.1\r\n"
-		"Host: oauth.yandex.ru\r\n"
-		"Connection: keep-alive\r\n"
-		"Content-Type: application/x-www-form-urlencoded\r\n\r\n"
-		"grant_type=password&username=12345@yandex.ru&password=12345lll&client_id=9d2223ab8e334c92bf2584a1e9a9516b&client_secret=ad81374363cf4a6ebd9aad69027615d5";
-    int bytes_sent = SSL_write(ssl, response, strlen(response));
+		"GET / HTTP/1.1\r\n"
+		"Host: webdav.yandex.ru\r\n"
+        //"Challenge: \"Basic\" realm\r\n"
+        "Depth: 1\r\n"
+        //"Content-Type: text/xml\r\n"
+        "Authorization: Basic Z2F2cmlsYW5kaWE6NzVyb21hNTVwb21h\r\n"
+        "Accept: */*\r\n\r\n";
+        //"<D:propfind xmlns:D=\"DAV:\"><D:prop><D:quota-available-bytes/><D:quota-used-bytes/></D:prop></D:propfind>";
+    int bytes_sent = SSL_write(ssl, request, strlen(request));
     //int bytes_sent = send(socket_peer, response, strlen(response), 0);
-    printf("Sent %d of %d bytes.\n", bytes_sent, (int)strlen(response));
+    printf("Sent %d of %d bytes.\n", bytes_sent, (int)strlen(request));
 
 	char *read = malloc(10000);
 	int bytes_received = SSL_read(ssl, read, 10000);
@@ -82,6 +91,13 @@ int main(int argc, char *argv[]){
 		printf("Connection closed by peer.\n");
 	}
 	printf("Received (%d bytes): %.*s", bytes_received, bytes_received, read);
+
+    // 3909894
+    const char *body = "grant_type=authorization_code&code="CODE"&client_id="CLIENT_ID"&client_secret="CLIENT_SECRET;
+    const char *request2 = "POST /token HTTP/1.1\r\n"
+		                  "Host: "HOST"\r\n"
+                          "Content-type: application/x-www-form-urlencoded\r\n"
+                          "Content-Length:" + strlen(body) + "\r\n\r\n" + body;
 
     printf("Closing socket...\n");
     SSL_free(ssl);
