@@ -14,6 +14,9 @@
 #include<openssl/ssl.h>
 #include<openssl/err.h>
 
+#include<libxml/parser.h>
+#include<libxml/tree.h>
+
 #define CLIENT_ID "9d2223ab8e334c92bf2584a1e9a9516b"
 #define CLIENT_SECRET "ad81374363cf4a6ebd9aad69027615d5"
 #define CODE "1449649"
@@ -21,7 +24,7 @@
 #define HOST "oauth.yandex.ru"
 #define WHOST "webdav.yandex.ru"
 
-#define MAXLINE 4096
+#define MAXLINE 54096
 
 //{"access_token": "AgAAAAAJfAwtAAaSXZEN657D4ETDiWSPzkL4oDE", "expires_in": 31536000, "refresh_token": "1:c0790JFluYo6AsrR:ZLZuX_KaVR_2EDeWof3G1zKDMne3DGeO-u8ywEe8VVwgd0JJEpr1:nOUDZvjgDg-U6hv3WgnUYQ", "token_type": "bearer"}
 int estTcpConn(SSL **ssl, SSL_CTX **ctx, int *socket_peer, const char *host, const char *service);
@@ -124,6 +127,18 @@ int estTcpConn(SSL **ssl, SSL_CTX **ctx, int *socket_peer, const char *host, con
     return 1;
 }
 
+static void print_element_names(xmlNode * a_node)
+{
+    xmlNode *cur_node = NULL;
+
+    for (cur_node = a_node; cur_node; cur_node = cur_node->next) {
+        if (cur_node->type == XML_ELEMENT_NODE) {
+            printf("node type: Element, name: %s\n", cur_node->name);
+        }
+        print_element_names(cur_node->children);
+    }
+}
+
 int main(int argc, char *argv[]){
     SSL *ssl = 0;
     SSL_CTX *ctx = 0; 
@@ -155,7 +170,17 @@ int main(int argc, char *argv[]){
     bytes_received = SSL_read(ssl, read, 10000);
     if (bytes_received < 1) 
 	    printf("Connection closed by peer.\n");
-    printf("Received (%d bytes): %.*s", bytes_received, bytes_received, read);
+    //printf("Received (%d bytes): %.*s", bytes_received, bytes_received, read);
+    char *httpbody = strstr(read, "\r\n\r\n");
+    if(httpbody) httpbody += 10;
+    printf("%s\n", httpbody);
+
+    LIBXML_TEST_VERSION
+    xmlNode *root_element = 0;
+    xmlDoc *doc = 0;
+    doc = xmlParseDoc(httpbody);
+    root_element = xmlDocGetRootElement(doc);
+    print_element_names(root_element);
 
     printf("Closing socket...\n");
     SSL_free(ssl);

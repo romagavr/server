@@ -1,1 +1,1 @@
--Wall ../client.c -o client -I/usr/include/openssl -lssl -lcrypto
+-Wall ../client.c -o client -I/usr/include/openssl -lssl -lcrypto -I/usr/include/libxml2 -lxml2
