@@ -124,19 +124,52 @@ int estTcpConn(SSL **ssl, SSL_CTX **ctx, int *socket_peer, const char *host, con
         fprintf(stderr, "SSL connect failed. (%d)\n", errno);
         return -1;
     }
+    printf("SSL connected.\n");
     return 1;
 }
 
-static void print_element_names(xmlNode * a_node)
+static void print_element_names(xmlNode *a_node)
 {
     xmlNode *cur_node = NULL;
-
     for (cur_node = a_node; cur_node; cur_node = cur_node->next) {
-        if (cur_node->type == XML_ELEMENT_NODE) {
-            printf("node type: Element, name: %s\n", cur_node->name);
+        if (cur_node->type == XML_ELEMENT_NODE && strcmp(cur_node->name, "href") == 0) {
+            printf("%s\n", xmlNodeGetContent(cur_node));
         }
         print_element_names(cur_node->children);
     }
+}
+
+ssize_t getFolderStruct(const char *folder, SSL *ssl, char **xml) {
+    char sendline[MAXLINE+1];
+    char *read = malloc(MAXLINE+1);
+    if (read == 0)
+        return -1;
+    int bytes_sent, bytes_received; 
+
+    snprintf(sendline, MAXLINE,
+		"PROPFIND %s HTTP/1.1\r\n"
+		"Host: %s\r\n"
+        "Accept: */*\r\n"
+        "Depth: 1\r\n"
+        "Authorization: OAuth %s\r\n\r\n", folder, WHOST, TOKEN);
+
+    bytes_sent = SSL_write(ssl, sendline, strlen(sendline));
+    bytes_received = SSL_read(ssl, read, MAXLINE);
+    if (bytes_received < 1) 
+	    printf("Connection closed by peer.\n");
+
+    *xml = strstr(read, "\r\n\r\n");
+    ssize_t len = -1;
+    if (*xml) {
+        len = strlen(*xml);
+        if (len > 10) 
+            *xml += 10;
+        else
+            len = -1;
+    }
+
+	printf("%d\n", len);
+    return len;
 }
 
 int main(int argc, char *argv[]){
@@ -148,37 +181,16 @@ int main(int argc, char *argv[]){
         exit(EXIT_FAILURE);
     };
 
+    char *xml = 0;
+    if (getFolderStruct("/", ssl, &xml) < 0) {
+        exit(EXIT_FAILURE);
+    }; 
     //getToken(ssl);
-
-    char sendline[MAXLINE+1];
-    char read[MAXLINE+1];
-    int bytes_sent, bytes_received; 
-
-    printf("Sending request...\n");
-
-    snprintf(sendline, MAXLINE,
-		"PROPFIND / HTTP/1.1\r\n"
-		"Host: %s\r\n"
-        "Accept: */*\r\n"
-        "Depth: 1\r\n"
-        "Authorization: OAuth %s\r\n\r\n", WHOST, TOKEN);
-
-    printf("\n%s\n", sendline);
-    bytes_sent = SSL_write(ssl, sendline, strlen(sendline));
-    printf("Sent %d of %d bytes.\n", bytes_sent, (int)strlen(sendline));
-
-    bytes_received = SSL_read(ssl, read, 10000);
-    if (bytes_received < 1) 
-	    printf("Connection closed by peer.\n");
-    //printf("Received (%d bytes): %.*s", bytes_received, bytes_received, read);
-    char *httpbody = strstr(read, "\r\n\r\n");
-    if(httpbody) httpbody += 10;
-    printf("%s\n", httpbody);
 
     LIBXML_TEST_VERSION
     xmlNode *root_element = 0;
     xmlDoc *doc = 0;
-    doc = xmlParseDoc(httpbody);
+    doc = xmlParseDoc(xml);
     root_element = xmlDocGetRootElement(doc);
     print_element_names(root_element);
 
@@ -187,6 +199,8 @@ int main(int argc, char *argv[]){
     close(socket_peer);
     SSL_CTX_free(ctx);
     printf("Finished.\n");
+
+    free(xml);
 
     return 0;
 }
