@@ -268,6 +268,48 @@ int fileUpload(const char *file, long int file_size, const char *remPath, SSL *s
     return 0;
 }
 
+int uploadFile(const char *localPath, const char *remotePath, SSL *ssl){
+    //TODO: check remote path
+    FILE *fd = fopen(localPath, "rb");
+    if (fd == 0){
+        fprintf(stderr, "fopen failed. (%d)\n", errno);
+        return -1;
+    }
+
+    fseek(fd, 0, SEEK_END);
+    long int file_size = ftell(fd);
+    if (file_size == -1){
+        fclose(fd);
+        fprintf(stderr, "filesize getting error. (%d)\n", errno);
+        return -1;
+    }
+    rewind(fd);
+    unsigned char *file = malloc(file_size);
+    if (file == 0){
+        fclose(fd);
+        fprintf(stderr, "Malloc() failed. (%d)\n", errno);
+        return -1;
+    }
+
+    //TODO: Check bounds of size_t and long int
+    size_t res = fread(file, 1, file_size, fd);
+    fclose(fd);
+    if (res != file_size) {
+        free(file);
+        fprintf(stderr, "fread error. (%d)\n", errno);
+        return -1;
+    }
+    //TODO: Concat name and remotePath
+    //TODO: Manual set name of remote file
+    int result = fileUpload(file, res, "/2.png", ssl);
+    free(file);
+    if (result == -1) {
+        fprintf(stderr, "File upload error.\n");
+        return -1;
+    }
+    return 0;
+}
+
 int main(int argc, char *argv[]){
     SSL *ssl = 0;
     SSL_CTX *ctx = 0; 
@@ -290,29 +332,13 @@ int main(int argc, char *argv[]){
     root_element = xmlDocGetRootElement(doc);
     print_element_names(root_element);
 */
-    FILE *fd = fopen("../res/2.png", "rb");
-    if (fd == 0){
-        fprintf(stderr, "fopen failed. (%d)\n", errno);
-        exit(EXIT_FAILURE);
-    }
-    fseek(fd, 0, SEEK_END);
-    long int file_size = ftell(fd);
-    printf("%d\n", file_size);
-    if (file_size == -1)
-        exit(EXIT_FAILURE);
-    rewind(fd);
-    unsigned char *file = malloc(file_size);
-    if (file == 0)
-        exit(EXIT_FAILURE);
-    // Check bounds of size_t and long int
-    size_t res = fread(file, 1, file_size, fd);
-    printf("Read %d\n", res);
-    if (res != file_size) {
-        fprintf(stderr, "fread error. (%d)\n", errno);
-        exit(EXIT_FAILURE);
-    }
-    fileUpload(file, res, "/2.png", ssl);
+    
 
+    int res = uploadFile("../res/2.png", "/", ssl);
+    if (res == -1){
+        fprintf(stderr, "File upload error.\n");
+        exit(EXIT_FAILURE);
+    }
     printf("Closing socket...\n");
     SSL_free(ssl);
     close(socket_peer);
