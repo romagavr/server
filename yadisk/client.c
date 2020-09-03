@@ -26,7 +26,7 @@
 #define WHOST "webdav.yandex.ru"
 
 #define MAXLINE 54096
-#define HEADER_SIZE 1000
+#define HEADER_LEN 1000
 //{"access_token": "AgAAAAAJfAwtAAaSXZEN657D4ETDiWSPzkL4oDE", "expires_in": 31536000, "refresh_token": "1:c0790JFluYo6AsrR:ZLZuX_KaVR_2EDeWof3G1zKDMne3DGeO-u8ywEe8VVwgd0JJEpr1:nOUDZvjgDg-U6hv3WgnUYQ", "token_type": "bearer"}
 int estTcpConn(SSL **ssl, SSL_CTX **ctx, int *socket_peer, const char *host, const char *service);
 int getToken();
@@ -158,7 +158,7 @@ ssize_t getFolderStruct(const char *folder, SSL *ssl, char **xml) {
     bytes_received = SSL_read(ssl, read, MAXLINE);
     if (bytes_received < 1) 
 	    printf("Connection closed by peer.\n");
-
+    //TODO: А заголовок?
     *xml = strstr(read, "\r\n\r\n");
     ssize_t len = -1;
     if (*xml) {
@@ -227,7 +227,7 @@ int fileUpload(const char *file, long int file_size, const char *remPath, SSL *s
     char *header = 0;
     if (HEADER_LEN < headerLen) {
         header = malloc(headerLen);
-        if (sendline == 0){
+        if (header == 0){
             fprintf(stderr, "Malloc() failed. (%d)\n", errno);
             return -1;
         }
@@ -269,6 +269,8 @@ int fileUpload(const char *file, long int file_size, const char *remPath, SSL *s
 }
 
 int uploadFile(const char *localPath, const char *remotePath, SSL *ssl){
+    char *resp = 0;
+    getFolderStruct(remotePath, ssl, char **xml) {
     //TODO: check remote path
     FILE *fd = fopen(localPath, "rb");
     if (fd == 0){
@@ -299,9 +301,34 @@ int uploadFile(const char *localPath, const char *remotePath, SSL *ssl){
         fprintf(stderr, "fread error. (%d)\n", errno);
         return -1;
     }
-    //TODO: Concat name and remotePath
+
+    //TODO: Check is it folder of file
+    int pos = 0;
+    for (int i=0; i<strlen(localPath); i++){
+        if (localPath[i] == '/')
+            pos = i+1;
+    }
+    char dst[10];
+    size_t dstPathLen = strlen(remotePath);
+    memcpy(dst, remotePath, dstPathLen);
+    if (dst[dstPathLen - 1] != '/'){
+        dst[dstPathLen] = '/';
+        dstPathLen++;
+    }
+    memcpy(dst + dstPathLen, localPath + pos, strlen(localPath) - pos);
+
+/////
+    printf("\n%s\n", dst);
+    for (int i=0; i <= strlen(dst); i++){
+        if (dst[i] == '\0')
+            printf("%c - null\n", dst[i]); 
+        printf("%c ", dst[i]); 
+    }
+    exit(EXIT_FAILURE);
+/////
+
     //TODO: Manual set name of remote file
-    int result = fileUpload(file, res, "/2.png", ssl);
+    int result = fileUpload(file, res, dst, ssl);
     free(file);
     if (result == -1) {
         fprintf(stderr, "File upload error.\n");
@@ -334,7 +361,7 @@ int main(int argc, char *argv[]){
 */
     
 
-    int res = uploadFile("../res/2.png", "/", ssl);
+    int res = uploadFile("../res/2.png", "/roman/234", ssl);
     if (res == -1){
         fprintf(stderr, "File upload error.\n");
         exit(EXIT_FAILURE);
