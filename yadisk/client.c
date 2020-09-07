@@ -18,6 +18,8 @@
 #include<libxml/parser.h>
 #include<libxml/tree.h>
 
+#include"http-parser/http_parser.h"
+
 #define CLIENT_ID "9d2223ab8e334c92bf2584a1e9a9516b"
 #define CLIENT_SECRET "ad81374363cf4a6ebd9aad69027615d5"
 #define CODE "1449649"
@@ -27,9 +29,21 @@
 
 #define MAXLINE 54096
 #define HEADER_LEN 1000
+
 //{"access_token": "AgAAAAAJfAwtAAaSXZEN657D4ETDiWSPzkL4oDE", "expires_in": 31536000, "refresh_token": "1:c0790JFluYo6AsrR:ZLZuX_KaVR_2EDeWof3G1zKDMne3DGeO-u8ywEe8VVwgd0JJEpr1:nOUDZvjgDg-U6hv3WgnUYQ", "token_type": "bearer"}
+
+typedef struct {
+    char *body;
+    char *headers;
+    size_t body_len;
+    size_t headers_len;
+
+    char* status;
+} parsedHttp;
+
 int estTcpConn(SSL **ssl, SSL_CTX **ctx, int *socket_peer, const char *host, const char *service);
 int getToken();
+static ssize_t socketWrite(const char *req, size_t reqLen, parsedHttp *resp, SSL *ssl);
 
 int getToken(){
     SSL *ssl = 0;
@@ -92,7 +106,10 @@ int estTcpConn(SSL **ssl, SSL_CTX **ctx, int *socket_peer, const char *host, con
    
     char address_buffer[100];
     char service_buffer[100];
-    getnameinfo(peer_address->ai_addr, peer_address->ai_addrlen, address_buffer, sizeof(address_buffer), service_buffer, sizeof(service_buffer), NI_NUMERICHOST);
+    getnameinfo(peer_address->ai_addr, peer_address->ai_addrlen, address_buffer,
+                sizeof(address_buffer),
+                service_buffer, sizeof(service_buffer),
+                NI_NUMERICHOST);
     printf("Remote address is: %s %s\n", address_buffer, service_buffer);
 
     printf("Creating socket...\n");
@@ -141,7 +158,7 @@ static void print_element_names(xmlNode *a_node)
 }
 
 ssize_t getFolderStruct(const char *folder, SSL *ssl, char **xml) {
-    char sendline[MAXLINE+1];
+    char *sendline = malloc(MAXLINE+1);
     char *read = malloc(MAXLINE+1);
     if (read == 0)
         return -1;
@@ -154,10 +171,14 @@ ssize_t getFolderStruct(const char *folder, SSL *ssl, char **xml) {
         "Depth: 1\r\n"
         "Authorization: OAuth %s\r\n\r\n", folder, WHOST, TOKEN);
 
+    parsedHttp *response = malloc(sizeof(parsedHttp));
+    ssize_t bytes_reseived = socketWrite(sendline, strlen(sendline), response, ssl);
+    exit(1);
     bytes_sent = SSL_write(ssl, sendline, strlen(sendline));
     bytes_received = SSL_read(ssl, read, MAXLINE);
     if (bytes_received < 1) 
 	    printf("Connection closed by peer.\n");
+
     //TODO: А заголовок?
     *xml = strstr(read, "\r\n\r\n");
     ssize_t len = -1;
@@ -237,7 +258,7 @@ int fileUpload(const char *file, long int file_size, const char *remPath, SSL *s
     
     // TODO Обработка ошибок
     snprintf(header, headerLen, req, remPath, WHOST, TOKEN, md5_string, sha256_string, file_size);
-    int packetLen = headerLen + file_size - 1;
+    size_t packetLen = headerLen + file_size - 1;
     char *packet = 0;
     if (MAXLINE < packetLen) {
         packet = malloc(packetLen);
@@ -257,6 +278,11 @@ int fileUpload(const char *file, long int file_size, const char *remPath, SSL *s
     char *read = malloc(MAXLINE+1);
     if (read == 0)
         return -1;
+
+    parsedHttp *response = malloc(sizeof(parsedHttp));
+    ssize_t bytes_reseived = socketWrite(packet, packetLen, response, ssl);
+
+    ////// 
     int bytes_sent, bytes_received; 
 
     bytes_sent = SSL_write(ssl, packet, packetLen);
@@ -264,13 +290,15 @@ int fileUpload(const char *file, long int file_size, const char *remPath, SSL *s
     printf("Received (%d bytes): %.*s", bytes_received, bytes_received, read);
     if (bytes_received < 1) 
 	    printf("Connection closed by peer.\n");
+    ////////
 
     return 0;
 }
 
+
 int uploadFile(const char *localPath, const char *remotePath, SSL *ssl){
     char *resp = 0;
-    getFolderStruct(remotePath, ssl, char **xml) {
+    //getFolderStruct(remotePath, ssl, xml);
     //TODO: check remote path
     FILE *fd = fopen(localPath, "rb");
     if (fd == 0){
@@ -337,6 +365,73 @@ int uploadFile(const char *localPath, const char *remotePath, SSL *ssl){
     return 0;
 }
 
+
+
+ssize_t socketWrite(const char *req, size_t reqLen, parsedHttp *resp, SSL *ssl){
+    int bytes_sent = 0, bytes_rec = 0;
+    int total_rec = 0;
+
+    char *read = malloc(MAXLINE+1);
+    if (read == 0)
+        return -1;
+
+    bytes_sent = SSL_write(ssl, req, reqLen);
+    printf("Sent\n");
+    while (1){
+        // TODO: память - проверка на достаточность
+        bytes_rec = SSL_read(ssl, read + total_rec, MAXLINE);
+        printf("bytes: %d\n", bytes_rec);
+        if (bytes_rec > 0) {
+            total_rec += bytes_rec;
+        } else {
+            int err = SSL_get_error(ssl, bytes_rec);
+            switch (err)
+            {
+                //TODO: check another errors
+                case SSL_ERROR_ZERO_RETURN:
+                {
+                    fprintf(stderr, "SSL_ERROR_ZERO_RETURN (peer disconnected) %i\n", err);
+                    break;
+                }
+
+                default:
+                {
+                    fprintf(stderr, "SSL read error: %i:%i\n", bytes_rec, err);
+                    break;
+                }
+            }
+            break;
+        }
+    }  
+    *(read + total_rec) = '\0';
+    printf("Received (%d bytes): %.*s", total_rec, total_rec, read);
+
+    // Память - очистка + выделение для resp
+    char *tmp = strstr(read, "\r\n\r\n");
+    if (tmp) {
+        printf("\nFull response: \n%s\n", read);
+        printf("Headers: \n%.*s\n", tmp - read, read);
+        char *ttmp = read;
+        int count = 0;
+        while (1) {
+            ttmp = strstr(ttmp, "\r\n");
+            if (ttmp && ttmp != read) {
+                printf("%.*s\n", ttmp - read + count, read);
+                count += ttmp - read + 4;
+                ttmp += count;
+            } else
+                break;
+        }
+        //resp->headers_len = tmp - read;
+        //memcpy(resp->headers, read, resp->headers_len);
+        //resp->body_len = strlen(tmp);
+        //memcpy(resp->body, read, resp->body_len);
+    } else {
+	    printf("Corrupted packet.\n");
+    }
+    exit(1);
+}
+
 int main(int argc, char *argv[]){
     SSL *ssl = 0;
     SSL_CTX *ctx = 0; 
@@ -346,13 +441,12 @@ int main(int argc, char *argv[]){
         exit(EXIT_FAILURE);
     };
 
-    /*char *xml = 0;
+    char *xml = 0;
     if (getFolderStruct("/", ssl, &xml) < 0) {
         exit(EXIT_FAILURE);
     }; 
     //getToken(ssl);
-
-    LIBXML_TEST_VERSION
+/*   LIBXML_TEST_VERSION
     xmlNode *root_element = 0;
     xmlDoc *doc = 0;
     doc = xmlParseDoc(xml);
@@ -361,11 +455,11 @@ int main(int argc, char *argv[]){
 */
     
 
-    int res = uploadFile("../res/2.png", "/roman/234", ssl);
+ /*   int res = uploadFile("../res/2.png", "/roman/234", ssl);
     if (res == -1){
         fprintf(stderr, "File upload error.\n");
         exit(EXIT_FAILURE);
-    }
+    } */
     printf("Closing socket...\n");
     SSL_free(ssl);
     close(socket_peer);

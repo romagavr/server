@@ -3,9 +3,10 @@
 cmake_minimum_required(VERSION 3.0)
 project(client)
 
-set(SOURCE_FILES client.c)
+set(SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/client.c ${CMAKE_CURRENT_SOURCE_DIR}/http-parser/http_parser.c)
+set(HEADER_FILES ${CMAKE_CURRENT_SOURCE_DIR}/http-parser/http_parser.h)
 
-add_executable(${PROJECT_NAME} ${SOURCE_FILES})
+add_executable(${PROJECT_NAME} ${SOURCE_FILES} ${HEADER_FILES})
 
 find_package(OpenSSL REQUIRED)
 if(NOT OpenSSL_FOUND)
