@@ -159,7 +159,12 @@ ssize_t getFolderStruct(const char *folder, SSL *ssl, char **xml) {
     if (bytes_received < 1) 
 	    printf("Connection closed by peer.\n");
     //TODO: А заголовок?
+
     *xml = strstr(read, "\r\n\r\n");
+
+    //printf("%.*s\n", *xml - read, read);
+    //printf("%s\n", *xml);
+    //exit(1);
     ssize_t len = -1;
     if (*xml) {
         len = strlen(*xml);
@@ -270,7 +275,8 @@ int fileUpload(const char *file, long int file_size, const char *remPath, SSL *s
 
 int uploadFile(const char *localPath, const char *remotePath, SSL *ssl){
     char *resp = 0;
-    getFolderStruct(remotePath, ssl, char **xml) {
+    char *xml = malloc(10000);
+    getFolderStruct(remotePath, ssl, &xml);
     //TODO: check remote path
     FILE *fd = fopen(localPath, "rb");
     if (fd == 0){
@@ -346,22 +352,28 @@ int main(int argc, char *argv[]){
         exit(EXIT_FAILURE);
     };
 
-    /*char *xml = 0;
-    if (getFolderStruct("/", ssl, &xml) < 0) {
+    char *xml = 0;
+    // без слэша в начале  - 400
+    // если нет такой директории - 404
+    // в остальных случаях - 207
+    if (getFolderStruct("/books/", ssl, &xml) < 0) {
         exit(EXIT_FAILURE);
     }; 
     //getToken(ssl);
 
+    //  Нужны тесты - на getFolderStruct("/books/", ssl, &xml)
+    //  выдает ошибку Entity: line 1: parser error : Start tag expected, '<' not found
+    // ?xml version='1.0' encoding='UTF-8'?><d:multistatus xmlns:d="DAV:">
     LIBXML_TEST_VERSION
     xmlNode *root_element = 0;
     xmlDoc *doc = 0;
     doc = xmlParseDoc(xml);
     root_element = xmlDocGetRootElement(doc);
     print_element_names(root_element);
-*/
-    
+  
+    exit(1);
 
-    int res = uploadFile("../res/2.png", "/roman/234", ssl);
+    int res = uploadFile("../res/2.png", "/", ssl);
     if (res == -1){
         fprintf(stderr, "File upload error.\n");
         exit(EXIT_FAILURE);
@@ -372,7 +384,7 @@ int main(int argc, char *argv[]){
     SSL_CTX_free(ctx);
     printf("Finished.\n");
 
- //   free(xml);
+    free(xml);
 
     return 0;
 }
