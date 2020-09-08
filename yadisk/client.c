@@ -41,6 +41,45 @@ typedef struct {
     char* status;
 } parsedHttp;
 
+http_parser_settings *settings;
+http_parser *parser;
+
+int on_header_field(http_parser *_, const char *at, size_t length) {
+    (void)_;
+    printf("Header field: %.*s\n", (int)length, at);
+    return 0;
+}
+
+int on_header_value(http_parser *_, const char *at, size_t length) {
+    (void)_;
+    printf("Header value: %.*s\n", (int)length, at);
+    return 0;
+}
+
+int on_message_begin(http_parser* _) {
+  (void)_;
+  printf("\n***MESSAGE BEGIN***\n\n");
+  return 0;
+}
+
+int on_headers_complete(http_parser* _) {
+  (void)_;
+  printf("\n***HEADERS COMPLETE***\n\n");
+  return 0;
+}
+
+int on_message_complete(http_parser* _) {
+  (void)_;
+  printf("\n***MESSAGE COMPLETE***\n\n");
+  return 0;
+}
+
+int on_body(http_parser* _, const char* at, size_t length) {
+  (void)_;
+  printf("Body: %.*s\n", (int)length, at);
+  return 0;
+}
+
 int estTcpConn(SSL **ssl, SSL_CTX **ctx, int *socket_peer, const char *host, const char *service);
 int getToken();
 static ssize_t socketWrite(const char *req, size_t reqLen, parsedHttp *resp, SSL *ssl);
@@ -388,6 +427,8 @@ ssize_t socketWrite(const char *req, size_t reqLen, parsedHttp *resp, SSL *ssl){
         bytes_rec = SSL_read(ssl, read + total_rec, MAXLINE);
         printf("bytes: %d\n", bytes_rec);
         if (bytes_rec > 0) {
+            ssize_t nparsed = http_parser_execute(parser, settings, read, bytes_rec);
+            //printf("\nMethod: %s\n", parser->method);
             total_rec += bytes_rec;
         } else {
             int err = SSL_get_error(ssl, bytes_rec);
@@ -438,6 +479,7 @@ ssize_t socketWrite(const char *req, size_t reqLen, parsedHttp *resp, SSL *ssl){
     exit(1);
 }
 
+
 int main(int argc, char *argv[]){
     SSL *ssl = 0;
     SSL_CTX *ctx = 0; 
@@ -447,6 +489,20 @@ int main(int argc, char *argv[]){
         exit(EXIT_FAILURE);
     };
 
+    settings = malloc(sizeof(http_parser_settings));
+    settings->on_header_field = on_header_field;
+    settings->on_header_value = on_header_value;
+    settings->on_message_begin = on_message_begin;
+    settings->on_headers_complete = on_headers_complete;
+    settings->on_body = on_body;
+    settings->on_message_complete = on_message_complete;
+
+    parser = malloc(sizeof(http_parser));
+    http_parser_init(parser, HTTP_RESPONSE);
+
+    parsedHttp *ppp = malloc(sizeof(parsedHttp));
+    parser->data = ppp;
+    
     char *xml = 0;
     // без слэша в начале  - 400
     // если нет такой директории - 404
@@ -465,14 +521,12 @@ int main(int argc, char *argv[]){
     doc = xmlParseDoc(xml);
     root_element = xmlDocGetRootElement(doc);
     print_element_names(root_element);
-  
     exit(1);
-
     int res = uploadFile("../res/2.png", "/", ssl);
     if (res == -1){
         fprintf(stderr, "File upload error.\n");
         exit(EXIT_FAILURE);
-    } */
+    }
     printf("Closing socket...\n");
     SSL_free(ssl);
     close(socket_peer);
