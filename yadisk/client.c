@@ -41,8 +41,8 @@ struct network {
     http_parser_settings *settings;
     http_parser *parser;
 
-    SSL ssl;
-    SSL_CTX ctx; 
+    SSL *ssl;
+    SSL_CTX *ctx; 
     int socket_peer;
 };
 
@@ -60,9 +60,6 @@ struct message {
   int headers_complete_cb_called;
   int message_complete_cb_called;
 };
-
-http_parser_settings *settings;
-http_parser *parser;
 
 int on_header_field(http_parser *parser, const char *data, size_t length) {
     struct message *m = (struct message *)parser->data;
@@ -111,16 +108,22 @@ int on_body(http_parser *parser, const char* data, size_t length) {
   return 0;
 }
 
-int estTcpConn(SSL **ssl, SSL_CTX **ctx, int *socket_peer, const char *host, const char *service);
+int estTcpConn(struct network *net, const char *host, const char *service);
 int getToken();
-static ssize_t socketWrite(const char *req, size_t reqLen, parsedHttp *resp, SSL *ssl);
+ssize_t getFolderStruct(const char *folder, struct network *net);
+static ssize_t socketWrite(const char *req, size_t reqLen, struct network *net);
+int fileUpload(const char *file, long int file_size, const char *remPath, struct network *net); 
+int uploadFile(const char *localPath, const char *remotePath, struct network *net);
+
+int parserInit(struct network *net);
+void parserFree(struct network *net);
 
 int getToken(){
     SSL *ssl = 0;
     SSL_CTX *ctx = 0; 
     int socket_peer = 0;
 
-    estTcpConn(&ssl, &ctx, &socket_peer,  WHOST, "https");
+    //estTcpConn(&ssl, &ctx, &socket_peer,  WHOST, "https");
 
     char sendline[MAXLINE+1];
     char read[MAXLINE+1];
@@ -162,9 +165,6 @@ int getToken(){
 }
 
 int estTcpConn(struct network *net, const char *host, const char *service) {
-    /////
-    parserInit();
-    ////
     printf("Configuring remote address...\n");
 
     struct addrinfo hints;
@@ -185,14 +185,14 @@ int estTcpConn(struct network *net, const char *host, const char *service) {
     printf("Remote address is: %s %s\n", address_buffer, service_buffer);
 
     printf("Creating socket...\n");
-    *socket_peer = socket(peer_address->ai_family, peer_address->ai_socktype, peer_address->ai_protocol);
+    int socket_peer = socket(peer_address->ai_family, peer_address->ai_socktype, peer_address->ai_protocol);
     if (socket_peer < 0) {
         fprintf(stderr, "socket() failed. (%d)\n", errno);
         return -1;
     }
     
     printf("Connecting...\n");
-    if (connect(*socket_peer, peer_address->ai_addr, peer_address->ai_addrlen)) {
+    if (connect(socket_peer, peer_address->ai_addr, peer_address->ai_addrlen)) {
         fprintf(stderr, "connect() failed. (%d)\n", errno);
         return -1;
     }
@@ -201,20 +201,28 @@ int estTcpConn(struct network *net, const char *host, const char *service) {
     printf("Connected.\n");
 
     printf("Openning ssl connection.\n");
+
     OpenSSL_add_all_algorithms();
     SSL_METHOD *method = SSLv23_client_method();
-    *ctx = SSL_CTX_new(method);
-    if (*ctx == 0) {
+    SSL_CTX *ctx = SSL_CTX_new(method);
+    if (ctx == 0) {
         fprintf(stderr, "SSL init failed. (%d)\n", errno);
         return -1;
     }
-    *ssl = SSL_new(*ctx); 
-    SSL_set_fd(*ssl, *socket_peer); 
-    if (SSL_connect(*ssl) == -1) {
+    SSL *ssl = SSL_new(ctx); 
+    SSL_set_fd(ssl, socket_peer); 
+    if (SSL_connect(ssl) == -1) {
         fprintf(stderr, "SSL connect failed. (%d)\n", errno);
         return -1;
     }
     printf("SSL connected.\n");
+
+    net->socket_peer = socket_peer;
+    net->ctx = ctx;
+    net->ssl = ssl;
+
+    parserInit(net);
+
     return 1;
 }
 
@@ -229,13 +237,8 @@ static void print_element_names(xmlNode *a_node)
     }
 }
 
-ssize_t getFolderStruct(const char *folder, SSL *ssl, char **xml) {
+ssize_t getFolderStruct(const char *folder, struct network *net) {
     char *sendline = malloc(MAXLINE+1);
-    char *read = malloc(MAXLINE+1);
-    if (read == 0)
-        return -1;
-    int bytes_sent, bytes_received; 
-
     snprintf(sendline, MAXLINE,
 		"PROPFIND %s HTTP/1.1\r\n"
 		"Host: %s\r\n"
@@ -243,35 +246,13 @@ ssize_t getFolderStruct(const char *folder, SSL *ssl, char **xml) {
         "Depth: 1\r\n"
         "Authorization: OAuth %s\r\n\r\n", folder, WHOST, TOKEN);
 
-    parsedHttp *response = malloc(sizeof(parsedHttp));
-    ssize_t bytes_reseived = socketWrite(sendline, strlen(sendline), response, ssl);
+    ssize_t bytes_reseived = socketWrite(sendline, strlen(sendline), net);
     exit(1);
-    bytes_sent = SSL_write(ssl, sendline, strlen(sendline));
-    bytes_received = SSL_read(ssl, read, MAXLINE);
-    if (bytes_received < 1) 
-	    printf("Connection closed by peer.\n");
-
-    //TODO: А заголовок?
-
-    *xml = strstr(read, "\r\n\r\n");
-
-    //printf("%.*s\n", *xml - read, read);
-    //printf("%s\n", *xml);
-    //exit(1);
-    ssize_t len = -1;
-    if (*xml) {
-        len = strlen(*xml);
-        if (len > 10) 
-            *xml += 10;
-        else
-            len = -1;
-    }
-
-	printf("%d\n", len);
-    return len;
+    return bytes_reseived;
 }
 
-int fileUpload(const char *file, long int file_size, const char *remPath, SSL *ssl) {
+int fileUpload(const char *file, long int file_size, const char *remPath, struct network *net) {
+    SSL *ssl = net->ssl;
 
     unsigned char md5_hash[MD5_DIGEST_LENGTH];
     char md5_string[MD5_DIGEST_LENGTH * 2 + 1];
@@ -356,8 +337,7 @@ int fileUpload(const char *file, long int file_size, const char *remPath, SSL *s
     if (read == 0)
         return -1;
 
-    parsedHttp *response = malloc(sizeof(parsedHttp));
-    ssize_t bytes_reseived = socketWrite(packet, packetLen, response, ssl);
+    ssize_t bytes_reseived = socketWrite(packet, packetLen, net);
 
     ////// 
     int bytes_sent, bytes_received; 
@@ -373,10 +353,11 @@ int fileUpload(const char *file, long int file_size, const char *remPath, SSL *s
 }
 
 
-int uploadFile(const char *localPath, const char *remotePath, SSL *ssl){
+int uploadFile(const char *localPath, const char *remotePath, struct network *net){
+    SSL *ssl = net->ssl;
     char *resp = 0;
     char *xml = malloc(10000);
-    getFolderStruct(remotePath, ssl, &xml);
+    getFolderStruct(remotePath, net);
     //TODO: check remote path
     FILE *fd = fopen(localPath, "rb");
     if (fd == 0){
@@ -434,7 +415,7 @@ int uploadFile(const char *localPath, const char *remotePath, SSL *ssl){
 /////
 
     //TODO: Manual set name of remote file
-    int result = fileUpload(file, res, dst, ssl);
+    int result = fileUpload(file, res, dst, net);
     free(file);
     if (result == -1) {
         fprintf(stderr, "File upload error.\n");
@@ -445,9 +426,12 @@ int uploadFile(const char *localPath, const char *remotePath, SSL *ssl){
 
 
 
-ssize_t socketWrite(const char *req, size_t reqLen, parsedHttp *resp, SSL *ssl){
+ssize_t socketWrite(const char *req, size_t reqLen, struct network *net){
     int bytes_sent = 0, bytes_rec = 0;
     int total_rec = 0;
+    http_parser_settings *settings = net->settings;
+    http_parser *parser = net->parser;
+    SSL *ssl = net->ssl;
 
     char *read = malloc(MAXLINE+1);
     if (read == 0)
@@ -462,11 +446,13 @@ ssize_t socketWrite(const char *req, size_t reqLen, parsedHttp *resp, SSL *ssl){
         if (bytes_rec > 0) {
             ssize_t nparsed = http_parser_execute(parser, settings, read + total_rec, bytes_rec);
             printf("\nStatus: %d\n", parser->status_code);
+            printf("\nStatus: %d\n", nparsed);
             total_rec += bytes_rec;
             struct message *m = (struct message *)parser->data;
             for (int i=0; i < m->num_headers; i++) {
                 printf("\nKey: %s; Value: %s\n", m->headers[i][0], m->headers[i][1]);
             }
+            printf("\nRaw: %hhx", m->body);
         } else {
             int err = SSL_get_error(ssl, bytes_rec);
             switch (err)
@@ -487,36 +473,13 @@ ssize_t socketWrite(const char *req, size_t reqLen, parsedHttp *resp, SSL *ssl){
             break;
         }
     }  
-    *(read + total_rec) = '\0';
-    printf("Received (%d bytes): %.*s", total_rec, total_rec, read);
-
-    // Память - очистка + выделение для resp
-    char *tmp = strstr(read, "\r\n\r\n");
-    if (tmp) {
-        printf("\nFull response: \n%s\n", read);
-        printf("Headers: \n%.*s\n", tmp - read, read);
-        char *ttmp = read;
-        int count = 0;
-        while (1) {
-            ttmp = strstr(ttmp, "\r\n");
-            if (ttmp && ttmp != read) {
-                printf("%.*s\n", ttmp - read + count, read);
-                count += ttmp - read + 4;
-                ttmp += count;
-            } else
-                break;
-        }
-        //resp->headers_len = tmp - read;
-        //memcpy(resp->headers, read, resp->headers_len);
-        //resp->body_len = strlen(tmp);
-        //memcpy(resp->body, read, resp->body_len);
-    } else {
-	    printf("Corrupted packet.\n");
-    }
     exit(1);
 }
 
-int parserInit(){
+int parserInit(struct network *net){
+    http_parser_settings *settings;
+    http_parser *parser;
+
     settings = malloc(sizeof(http_parser_settings));
     if (settings == 0) {
         fprintf(stderr,"parserInit(): http_parser_settings malloc error\n");
@@ -557,43 +520,51 @@ int parserInit(){
     }
     memset(m->raw, 0, RAW_SIZE);
     parser->data = m;
+
+    net->parser = parser;
+    net->settings = settings;
+
     return 1;
 }
 
-void parserFree(){
+void parserFree(struct network *net){
+    http_parser_settings *settings = net->settings;
+    http_parser *parser = net->parser;
+
     struct message *m = (struct message *)parser->data;
     free(m->body);
     free(m->raw);
     free(m);
     free(parser);
     free(settings);
+
+    net->settings = 0;
+    net->parser = 0;
 }
 
 int main(int argc, char *argv[]){
     struct network *net = malloc(sizeof(struct network));
     memset(net, 0, sizeof(struct network));
-    SSL *ssl = 0;
-    SSL_CTX *ctx = 0; 
-    int socket_peer = 0;
 
     if (estTcpConn(net,  WHOST, "https") < 0) {
         exit(EXIT_FAILURE);
     };
 
 
-    char *xml = 0;
     // без слэша в начале  - 400
     // если нет такой директории - 404
     // в остальных случаях - 207
-    if (getFolderStruct("/books/", ssl, &xml) < 0) {
+    if (getFolderStruct("/books/", net) < 0) {
         exit(EXIT_FAILURE);
     }; 
+    char *xml = 0;
     //getToken(ssl);
 
     //  Нужны тесты - на getFolderStruct("/books/", ssl, &xml)
     //  выдает ошибку Entity: line 1: parser error : Start tag expected, '<' not found
     // ?xml version='1.0' encoding='UTF-8'?><d:multistatus xmlns:d="DAV:">
-    LIBXML_TEST_VERSION
+
+    /*LIBXML_TEST_VERSION
     xmlNode *root_element = 0;
     xmlDoc *doc = 0;
     doc = xmlParseDoc(xml);
@@ -610,8 +581,8 @@ int main(int argc, char *argv[]){
     close(socket_peer);
     SSL_CTX_free(ctx);
     printf("Finished.\n");
-
+    */
     free(xml);
-    parserFree();
+    parserFree(net);
     return 0;
 }
