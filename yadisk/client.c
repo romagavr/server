@@ -27,7 +27,7 @@
 #define HOST "oauth.yandex.ru"
 #define WHOST "webdav.yandex.ru"
 
-#define MAXLINE 54096
+#define MAXLINE 5000
 #define HEADER_LEN 1000
 
 //{"access_token": "AgAAAAAJfAwtAAaSXZEN657D4ETDiWSPzkL4oDE", "expires_in": 31536000, "refresh_token": "1:c0790JFluYo6AsrR:ZLZuX_KaVR_2EDeWof3G1zKDMne3DGeO-u8ywEe8VVwgd0JJEpr1:nOUDZvjgDg-U6hv3WgnUYQ", "token_type": "bearer"}
@@ -41,42 +41,73 @@ typedef struct {
     char* status;
 } parsedHttp;
 
+#define MAX_ELEMENT_SIZE 500 
+#define MAX_HEADERS 15
+#define BODY_SIZE 3000
+#define ROW_SIZE 5000
+
+struct message {
+  const char *raw;
+  enum http_parser_type type;
+  int status_code;
+  char *body;
+  int num_headers;
+  enum { NONE=0, FIELD, VALUE } last_header_element;
+  char headers[MAX_HEADERS][2][MAX_ELEMENT_SIZE];
+  int should_keep_alive;
+
+  int message_begin_cb_called;
+  int headers_complete_cb_called;
+  int message_complete_cb_called;
+};
+
 http_parser_settings *settings;
 http_parser *parser;
 
-int on_header_field(http_parser *_, const char *at, size_t length) {
-    (void)_;
-    printf("Header field: %.*s\n", (int)length, at);
+int on_header_field(http_parser *parser, const char *data, size_t length) {
+    struct message *m = (struct message *)parser->data;
+    if (m->last_header_element != FIELD)
+        m->num_headers++;
+    strncat(m->headers[m->num_headers-1][0], data, length);
+    m->last_header_element = FIELD;
+    printf("Header field: %.*s\n", (int)length, data);
     return 0;
 }
 
-int on_header_value(http_parser *_, const char *at, size_t length) {
-    (void)_;
-    printf("Header value: %.*s\n", (int)length, at);
+int on_header_value(http_parser *parser, const char *data, size_t length) {
+    struct message *m = (struct message *)parser->data;
+    strncat(m->headers[m->num_headers-1][1], data, length);
+    m->last_header_element = VALUE;
+    printf("Header value: %.*s\n", (int)length, data);
     return 0;
 }
 
-int on_message_begin(http_parser* _) {
-  (void)_;
+int on_message_begin(http_parser *parser) {
+  struct message *m = (struct message *)parser->data;
+  m->message_begin_cb_called = 1;
   printf("\n***MESSAGE BEGIN***\n\n");
   return 0;
 }
 
-int on_headers_complete(http_parser* _) {
-  (void)_;
+int on_headers_complete(http_parser *parser) {
+  struct message *m = (struct message *)parser->data;
+  m->headers_complete_cb_called = 1;
   printf("\n***HEADERS COMPLETE***\n\n");
   return 0;
 }
 
-int on_message_complete(http_parser* _) {
-  (void)_;
+int on_message_complete(http_parser *parser) {
+  struct message *m = (struct message *)parser->data;
+  m->status_code = parser->status_code;
+  m->message_complete_cb_called = 1;
   printf("\n***MESSAGE COMPLETE***\n\n");
   return 0;
 }
 
-int on_body(http_parser* _, const char* at, size_t length) {
-  (void)_;
-  printf("Body: %.*s\n", (int)length, at);
+int on_body(http_parser *parser, const char* data, size_t length) {
+  struct message *m = (struct message *)parser->data;
+  strncat(m->body, data, length);
+  printf("Body: %.*s\n", (int)length, data);
   return 0;
 }
 
@@ -427,9 +458,13 @@ ssize_t socketWrite(const char *req, size_t reqLen, parsedHttp *resp, SSL *ssl){
         bytes_rec = SSL_read(ssl, read + total_rec, MAXLINE);
         printf("bytes: %d\n", bytes_rec);
         if (bytes_rec > 0) {
-            ssize_t nparsed = http_parser_execute(parser, settings, read, bytes_rec);
-            //printf("\nMethod: %s\n", parser->method);
+            ssize_t nparsed = http_parser_execute(parser, settings, read + total_rec, bytes_rec);
+            printf("\nStatus: %d\n", parser->status_code);
             total_rec += bytes_rec;
+            struct message *m = (struct message *)parser->data;
+            for (int i=0; i < m->num_headers; i++) {
+                printf("\nKey: %s; Value: %s\n", m->headers[i][0], m->headers[i][1]);
+            }
         } else {
             int err = SSL_get_error(ssl, bytes_rec);
             switch (err)
@@ -500,8 +535,14 @@ int main(int argc, char *argv[]){
     parser = malloc(sizeof(http_parser));
     http_parser_init(parser, HTTP_RESPONSE);
 
-    parsedHttp *ppp = malloc(sizeof(parsedHttp));
-    parser->data = ppp;
+    struct message *m = malloc(sizeof(struct message));
+    m->body = malloc(BODY_SIZE);
+    m->raw = malloc(ROW_SIZE);
+    m->num_headers = 0;
+    m->message_begin_cb_called = 0;
+    m->headers_complete_cb_called = 0;
+    m->message_complete_cb_called = 0;
+    parser->data = m;
     
     char *xml = 0;
     // без слэша в начале  - 400
