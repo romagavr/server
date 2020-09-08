@@ -32,19 +32,19 @@
 
 //{"access_token": "AgAAAAAJfAwtAAaSXZEN657D4ETDiWSPzkL4oDE", "expires_in": 31536000, "refresh_token": "1:c0790JFluYo6AsrR:ZLZuX_KaVR_2EDeWof3G1zKDMne3DGeO-u8ywEe8VVwgd0JJEpr1:nOUDZvjgDg-U6hv3WgnUYQ", "token_type": "bearer"}
 
-typedef struct {
-    char *body;
-    char *headers;
-    size_t body_len;
-    size_t headers_len;
-
-    char* status;
-} parsedHttp;
-
 #define MAX_ELEMENT_SIZE 500 
 #define MAX_HEADERS 15
 #define BODY_SIZE 3000
-#define ROW_SIZE 5000
+#define RAW_SIZE 5000
+
+struct network {
+    http_parser_settings *settings;
+    http_parser *parser;
+
+    SSL ssl;
+    SSL_CTX ctx; 
+    int socket_peer;
+};
 
 struct message {
   const char *raw;
@@ -161,8 +161,10 @@ int getToken(){
     return 0;
 }
 
-int estTcpConn(SSL **ssl, SSL_CTX **ctx, int *socket_peer, const char *host, const char *service) {
-
+int estTcpConn(struct network *net, const char *host, const char *service) {
+    /////
+    parserInit();
+    ////
     printf("Configuring remote address...\n");
 
     struct addrinfo hints;
@@ -514,17 +516,13 @@ ssize_t socketWrite(const char *req, size_t reqLen, parsedHttp *resp, SSL *ssl){
     exit(1);
 }
 
-
-int main(int argc, char *argv[]){
-    SSL *ssl = 0;
-    SSL_CTX *ctx = 0; 
-    int socket_peer = 0;
-
-    if (estTcpConn(&ssl, &ctx, &socket_peer,  WHOST, "https") < 0) {
-        exit(EXIT_FAILURE);
-    };
-
+int parserInit(){
     settings = malloc(sizeof(http_parser_settings));
+    if (settings == 0) {
+        fprintf(stderr,"parserInit(): http_parser_settings malloc error\n");
+        return 0;
+    }
+    memset(settings, 0, sizeof(http_parser_settings));
     settings->on_header_field = on_header_field;
     settings->on_header_value = on_header_value;
     settings->on_message_begin = on_message_begin;
@@ -533,17 +531,56 @@ int main(int argc, char *argv[]){
     settings->on_message_complete = on_message_complete;
 
     parser = malloc(sizeof(http_parser));
+    if (parser == 0) {
+        fprintf(stderr,"parserInit(): http_parser malloc error\n");
+        return 0;
+    }
+    memset(parser, 0, sizeof(http_parser));
     http_parser_init(parser, HTTP_RESPONSE);
 
     struct message *m = malloc(sizeof(struct message));
+    if (m == 0) {
+        fprintf(stderr,"parserInit(): Message malloc error\n");
+        return 0;
+    }
+    memset(m, 0, sizeof(struct message));
     m->body = malloc(BODY_SIZE);
-    m->raw = malloc(ROW_SIZE);
-    m->num_headers = 0;
-    m->message_begin_cb_called = 0;
-    m->headers_complete_cb_called = 0;
-    m->message_complete_cb_called = 0;
+    if (m->body == 0) {
+        fprintf(stderr,"parserInit(): Message malloc error\n");
+        return 0;
+    }
+    memset(m->body, 0, BODY_SIZE);
+    m->raw = malloc(RAW_SIZE);
+    if (m->raw == 0) {
+        fprintf(stderr,"parserInit(): Message malloc error\n");
+        return 0;
+    }
+    memset(m->raw, 0, RAW_SIZE);
     parser->data = m;
-    
+    return 1;
+}
+
+void parserFree(){
+    struct message *m = (struct message *)parser->data;
+    free(m->body);
+    free(m->raw);
+    free(m);
+    free(parser);
+    free(settings);
+}
+
+int main(int argc, char *argv[]){
+    struct network *net = malloc(sizeof(struct network));
+    memset(net, 0, sizeof(struct network));
+    SSL *ssl = 0;
+    SSL_CTX *ctx = 0; 
+    int socket_peer = 0;
+
+    if (estTcpConn(net,  WHOST, "https") < 0) {
+        exit(EXIT_FAILURE);
+    };
+
+
     char *xml = 0;
     // без слэша в начале  - 400
     // если нет такой директории - 404
@@ -575,6 +612,6 @@ int main(int argc, char *argv[]){
     printf("Finished.\n");
 
     free(xml);
-
+    parserFree();
     return 0;
 }
