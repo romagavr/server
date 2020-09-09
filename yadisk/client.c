@@ -36,6 +36,7 @@
 #define MAX_HEADERS 15
 #define BODY_SIZE 3000
 #define RAW_SIZE 5000
+#define MAX_CHUNKS 16
 
 struct network {
     http_parser_settings *settings;
@@ -44,13 +45,16 @@ struct network {
     SSL *ssl;
     SSL_CTX *ctx; 
     int socket_peer;
+
+    char *read;
 };
 
 struct message {
-  const char *raw;
+  const char *raw;  // add to complete
   enum http_parser_type type;
   int status_code;
   char *body;
+  int content_length;
   int num_headers;
   enum { NONE=0, FIELD, VALUE } last_header_element;
   char headers[MAX_HEADERS][2][MAX_ELEMENT_SIZE];
@@ -59,7 +63,29 @@ struct message {
   int message_begin_cb_called;
   int headers_complete_cb_called;
   int message_complete_cb_called;
+
+  int chunked;
+  int chunk_length;
+
+  int num_chunks;
+  int num_chunks_complete;
+  //int chunk_length[MAX_CHUNKS];
 };
+
+int on_chunk_header(http_parser *parser) {
+    struct message *m = (struct message *)parser->data;
+    if (m->chunked != 1)
+        m->chunked = 1;
+    m->chunk_length = parser->content_length;
+    m->content_length += parser->content_length;
+    printf("Chunk length: %d\n", parser->content_length);
+    return 0;
+}
+
+int on_chunk_complete(http_parser *parser) {
+    
+    return 0;
+}
 
 int on_header_field(http_parser *parser, const char *data, size_t length) {
     struct message *m = (struct message *)parser->data;
@@ -115,8 +141,8 @@ static ssize_t socketWrite(const char *req, size_t reqLen, struct network *net);
 int fileUpload(const char *file, long int file_size, const char *remPath, struct network *net); 
 int uploadFile(const char *localPath, const char *remotePath, struct network *net);
 
-int parserInit(struct network *net);
-void parserFree(struct network *net);
+struct network* initNetworkStruct();
+void freeNetworkStruct(struct network *net);
 
 int getToken(){
     SSL *ssl = 0;
@@ -221,8 +247,6 @@ int estTcpConn(struct network *net, const char *host, const char *service) {
     net->ctx = ctx;
     net->ssl = ssl;
 
-    parserInit(net);
-
     return 1;
 }
 
@@ -247,7 +271,6 @@ ssize_t getFolderStruct(const char *folder, struct network *net) {
         "Authorization: OAuth %s\r\n\r\n", folder, WHOST, TOKEN);
 
     ssize_t bytes_reseived = socketWrite(sendline, strlen(sendline), net);
-    exit(1);
     return bytes_reseived;
 }
 
@@ -424,37 +447,41 @@ int uploadFile(const char *localPath, const char *remotePath, struct network *ne
     return 0;
 }
 
-
-
-ssize_t socketWrite(const char *req, size_t reqLen, struct network *net){
-    int bytes_sent = 0, bytes_rec = 0;
-    int total_rec = 0;
-    http_parser_settings *settings = net->settings;
-    http_parser *parser = net->parser;
-    SSL *ssl = net->ssl;
-
-    char *read = malloc(MAXLINE+1);
-    if (read == 0)
-        return -1;
-
-    bytes_sent = SSL_write(ssl, req, reqLen);
-    printf("Sent\n");
-    while (1){
-        // TODO: память - проверка на достаточность
-        bytes_rec = SSL_read(ssl, read + total_rec, MAXLINE);
-        printf("bytes: %d\n", bytes_rec);
-        if (bytes_rec > 0) {
+/*            printf("\n%.*s\n", bytes_rec, read+total_rec);
             ssize_t nparsed = http_parser_execute(parser, settings, read + total_rec, bytes_rec);
+             
             printf("\nStatus: %d\n", parser->status_code);
             printf("\nStatus: %d\n", nparsed);
             total_rec += bytes_rec;
             struct message *m = (struct message *)parser->data;
+
+            printf("\n%d\n", m->status_code);
             for (int i=0; i < m->num_headers; i++) {
                 printf("\nKey: %s; Value: %s\n", m->headers[i][0], m->headers[i][1]);
             }
-            printf("\nRaw: %hhx", m->body);
+            printf("\nRaw: %hhx", m->body); */
+
+ssize_t socketWrite(const char *req, size_t reqLen, struct network *net){
+    int bytes_sent = 0, bytes_rec = 0;
+    struct message *m = (struct message *)net->parser->data;
+
+    // TODO: Обработка отправки
+    bytes_sent = SSL_write(net->ssl, req, reqLen);
+    printf("Sent\n");
+    while (1){
+        // TODO: память - проверка на достаточность
+        // TODO: проверка статуса ответа
+        // TODO: разобраться, как определить, что всё сообщение пришло
+        memset(net->read, 0, MAXLINE);
+        bytes_rec = SSL_read(net->ssl, net->read, MAXLINE);
+        if (bytes_rec > 0) {
+            ssize_t nparsed = http_parser_execute(net->parser, net->settings, net->read, bytes_rec);
+            printf("\nNparsed: %d\n", nparsed);
+            if (m->chunked && m->chunk_length == 0) 
+                break;
+
         } else {
-            int err = SSL_get_error(ssl, bytes_rec);
+            int err = SSL_get_error(net->ssl, bytes_rec);
             switch (err)
             {
                 //TODO: check another errors
@@ -473,16 +500,28 @@ ssize_t socketWrite(const char *req, size_t reqLen, struct network *net){
             break;
         }
     }  
-    exit(1);
+    return 1;
 }
 
-int parserInit(struct network *net){
+struct network* initNetworkStruct(){
+    struct network *net = malloc(sizeof(struct network));
+    if (net == 0) {
+        fprintf(stderr,"initNetworkStruct(): struct network malloc error\n");
+        return 0;
+    }
+    memset(net, 0, sizeof(struct network));
+    net->read = malloc(MAXLINE);
+    if (net == 0) {
+        fprintf(stderr,"initNetworkStruct(): struct network data field malloc error\n");
+        return 0;
+    }
+
     http_parser_settings *settings;
     http_parser *parser;
 
     settings = malloc(sizeof(http_parser_settings));
     if (settings == 0) {
-        fprintf(stderr,"parserInit(): http_parser_settings malloc error\n");
+        fprintf(stderr,"initNetworkStruct(): http_parser_settings malloc error\n");
         return 0;
     }
     memset(settings, 0, sizeof(http_parser_settings));
@@ -492,10 +531,12 @@ int parserInit(struct network *net){
     settings->on_headers_complete = on_headers_complete;
     settings->on_body = on_body;
     settings->on_message_complete = on_message_complete;
+    settings->on_chunk_header = on_chunk_header;
+    settings->on_chunk_complete = on_chunk_complete;
 
     parser = malloc(sizeof(http_parser));
     if (parser == 0) {
-        fprintf(stderr,"parserInit(): http_parser malloc error\n");
+        fprintf(stderr,"initNetworkStruct(): http_parser malloc error\n");
         return 0;
     }
     memset(parser, 0, sizeof(http_parser));
@@ -503,19 +544,19 @@ int parserInit(struct network *net){
 
     struct message *m = malloc(sizeof(struct message));
     if (m == 0) {
-        fprintf(stderr,"parserInit(): Message malloc error\n");
+        fprintf(stderr,"initNetworkStruct(): Message malloc error\n");
         return 0;
     }
     memset(m, 0, sizeof(struct message));
     m->body = malloc(BODY_SIZE);
     if (m->body == 0) {
-        fprintf(stderr,"parserInit(): Message malloc error\n");
+        fprintf(stderr,"initNetworkStruct(): Message malloc error\n");
         return 0;
     }
     memset(m->body, 0, BODY_SIZE);
     m->raw = malloc(RAW_SIZE);
     if (m->raw == 0) {
-        fprintf(stderr,"parserInit(): Message malloc error\n");
+        fprintf(stderr,"initNetworkStruct(): Message malloc error\n");
         return 0;
     }
     memset(m->raw, 0, RAW_SIZE);
@@ -524,10 +565,10 @@ int parserInit(struct network *net){
     net->parser = parser;
     net->settings = settings;
 
-    return 1;
+    return net;
 }
 
-void parserFree(struct network *net){
+void freeNetworkStruct(struct network *net){
     http_parser_settings *settings = net->settings;
     http_parser *parser = net->parser;
 
@@ -538,39 +579,40 @@ void parserFree(struct network *net){
     free(parser);
     free(settings);
 
-    net->settings = 0;
-    net->parser = 0;
+    free(net->read);
+    free(net);
 }
 
 int main(int argc, char *argv[]){
-    struct network *net = malloc(sizeof(struct network));
-    memset(net, 0, sizeof(struct network));
-
+    struct network *net = initNetworkStruct();
+    if (net == 0){
+        exit(EXIT_FAILURE);
+    }
     if (estTcpConn(net,  WHOST, "https") < 0) {
         exit(EXIT_FAILURE);
     };
-
+    struct message *m = (struct message *)net->parser->data;
 
     // без слэша в начале  - 400
     // если нет такой директории - 404
     // в остальных случаях - 207
-    if (getFolderStruct("/books/", net) < 0) {
+    if (getFolderStruct("/booksd/", net) < 0) {
         exit(EXIT_FAILURE);
     }; 
-    char *xml = 0;
     //getToken(ssl);
 
     //  Нужны тесты - на getFolderStruct("/books/", ssl, &xml)
     //  выдает ошибку Entity: line 1: parser error : Start tag expected, '<' not found
     // ?xml version='1.0' encoding='UTF-8'?><d:multistatus xmlns:d="DAV:">
-
-    /*LIBXML_TEST_VERSION
+    printf("MAIN: %s\n", m->body);
+    LIBXML_TEST_VERSION
     xmlNode *root_element = 0;
     xmlDoc *doc = 0;
-    doc = xmlParseDoc(xml);
+    doc = xmlParseDoc(m->body);
     root_element = xmlDocGetRootElement(doc);
     print_element_names(root_element);
     exit(1);
+    /*
     int res = uploadFile("../res/2.png", "/", ssl);
     if (res == -1){
         fprintf(stderr, "File upload error.\n");
@@ -582,7 +624,7 @@ int main(int argc, char *argv[]){
     SSL_CTX_free(ctx);
     printf("Finished.\n");
     */
-    free(xml);
-    parserFree(net);
+    //free(xml);
+    freeNetworkStruct(net);
     return 0;
 }
