@@ -52,7 +52,7 @@ struct network {
 struct message {
   const char *raw;  // add to complete
   enum http_parser_type type;
-  int status_code;
+  int status;
   char *body;
   int content_length;
   int num_headers;
@@ -121,7 +121,7 @@ int on_headers_complete(http_parser *parser) {
 
 int on_message_complete(http_parser *parser) {
   struct message *m = (struct message *)parser->data;
-  m->status_code = parser->status_code;
+  m->status = parser->status_code;
   m->message_complete_cb_called = 1;
   printf("\n***MESSAGE COMPLETE***\n\n");
   return 0;
@@ -468,18 +468,18 @@ ssize_t socketWrite(const char *req, size_t reqLen, struct network *net){
     // TODO: Обработка отправки
     bytes_sent = SSL_write(net->ssl, req, reqLen);
     printf("Sent\n");
+    // TODO: очистка message структуры
     while (1){
         // TODO: память - проверка на достаточность
         // TODO: проверка статуса ответа
-        // TODO: разобраться, как определить, что всё сообщение пришло
         memset(net->read, 0, MAXLINE);
         bytes_rec = SSL_read(net->ssl, net->read, MAXLINE);
         if (bytes_rec > 0) {
             ssize_t nparsed = http_parser_execute(net->parser, net->settings, net->read, bytes_rec);
+            // Проверка ошибок http_parser
             printf("\nNparsed: %d\n", nparsed);
-            if (m->chunked && m->chunk_length == 0) 
+            if (m->message_complete_cb_called)
                 break;
-
         } else {
             int err = SSL_get_error(net->ssl, bytes_rec);
             switch (err)
@@ -503,6 +503,7 @@ ssize_t socketWrite(const char *req, size_t reqLen, struct network *net){
     return 1;
 }
 
+// TODO: при ошибке - очистка памяти
 struct network* initNetworkStruct(){
     struct network *net = malloc(sizeof(struct network));
     if (net == 0) {
