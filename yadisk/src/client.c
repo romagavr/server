@@ -67,8 +67,25 @@ ssize_t getFolderStruct(const char *folder, struct network *net) {
         "Depth: 1\r\n"
         "Authorization: OAuth %s\r\n\r\n", folder, WHOST, TOKEN);
 
-    ssize_t bytes_reseived = socketWrite(sendline, strlen(sendline), net);
-    return bytes_reseived;
+    int res = socketWrite(sendline, strlen(sendline), net);
+    if (res == 0) {
+        fprintf(stderr, "Error in socketWrite\n");
+        return 0;
+    }
+    struct message *m = (struct message *)net->parser->data;
+    if (m->status == 404 || m->status == 400)
+        return 0;
+    if (m->content_length > 0){
+        LIBXML_TEST_VERSION
+        xmlNode *root_element = 0;
+        xmlDoc *doc = 0;
+        doc = xmlParseDoc(m->body);
+        root_element = xmlDocGetRootElement(doc);
+        //TODO: Надо бы тут сделать парсинг удаленных дирeкторий B-tree??
+        print_element_names(root_element);
+    }
+
+    return 1;
 }
 
 int fileUpload(const char *file, long int file_size, const char *remPath, struct network *net) {
@@ -174,9 +191,7 @@ int fileUpload(const char *file, long int file_size, const char *remPath, struct
 
 
 int uploadFile(const char *localPath, const char *remotePath, struct network *net){
-    SSL *ssl = net->ssl;
-    char *resp = 0;
-    char *xml = malloc(10000);
+
     getFolderStruct(remotePath, net);
     //TODO: check remote path
     FILE *fd = fopen(localPath, "rb");

@@ -13,7 +13,7 @@ int main(int argc, char *argv[]){
     // без слэша в начале  - 400
     // если нет такой директории - 404
     // в остальных случаях - 207
-    if (getFolderStruct("/booksd/", net) < 0) {
+    if (getFolderStruct("/books/", net) < 0) {
         exit(EXIT_FAILURE);
     }; 
     //getToken(ssl);
@@ -21,14 +21,6 @@ int main(int argc, char *argv[]){
     //  Нужны тесты - на getFolderStruct("/books/", ssl, &xml)
     //  выдает ошибку Entity: line 1: parser error : Start tag expected, '<' not found
     // ?xml version='1.0' encoding='UTF-8'?><d:multistatus xmlns:d="DAV:">
-    printf("MAIN: %s\n", m->body);
-    LIBXML_TEST_VERSION
-    xmlNode *root_element = 0;
-    xmlDoc *doc = 0;
-    doc = xmlParseDoc(m->body);
-    root_element = xmlDocGetRootElement(doc);
-    print_element_names(root_element);
-    exit(1);
     /*
     int res = uploadFile("../res/2.png", "/", ssl);
     if (res == -1){
